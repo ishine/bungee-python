@@ -1,0 +1,19 @@
+# filepath: /home/longred/self-project/bungee-python/pyproject.toml
+[build-system]
+requires = [
+    "scikit-build-core>=0.7",
+    "pybind11>=2.11",
+    "ninja",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "bungee-python"
+version = "0.1.0"
+description = "Python bindings for the Bungee time/pitch stretching library"
+readme = "README.md"
+license = { text = "Specify Your License" }
+
+[tool.scikit-build]
+cmake.source-dir = "."
+wheel.packages = ["src/bungee_python"]
