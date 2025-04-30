@@ -1,3 +1,6 @@
 [submodule "bungee-core"]
 	path = bungee-core
 	url = https://github.com/bungee-audio-stretch/bungee.git
+[submodule "extern/pybind11"]
+	path = extern/pybind11
+	url = https://github.com/pybind/pybind11.git
