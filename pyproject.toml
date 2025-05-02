@@ -1,9 +1,8 @@
-# filepath: /home/longred/self-project/bungee-python/pyproject.toml
 [build-system]
 requires = [
     "scikit-build-core>=0.7",
     "pybind11>=2.11",
-    "ninja",
+    "ninja"
 ]
 build-backend = "scikit_build_core.build"
 
@@ -12,8 +11,15 @@ name = "bungee-python"
 version = "0.1.0"
 description = "Python bindings for the Bungee time/pitch stretching library"
 readme = "README.md"
-license = { text = "Specify Your License" }
+license = { text = "MPL-2.0" }
 
 [tool.scikit-build]
 cmake.source-dir = "."
 wheel.packages = ["src/bungee_python"]
+
+[tool.cibuildwheel]
+before-build = "bash scripts/before_build.sh"
+# 仅构建 CPython 3.8 及以上版本
+build = "cp38-* cp39-* cp310-* cp311-* cp312-*"
+# 跳过 32 位和 musllinux
+skip = "*-musllinux_* *-i686"
