@@ -31,7 +31,7 @@ endif()
 
 
 install(TARGETS bungee bungee_library
-        LIBRARY DESTINATION src/bungee_python
-        RUNTIME DESTINATION src/bungee_python 
-        ARCHIVE DESTINATION src/bungee_python
+        LIBRARY DESTINATION bungee_python
+        RUNTIME DESTINATION bungee_python
+        ARCHIVE DESTINATION bungee_python
 )

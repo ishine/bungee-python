@@ -8,7 +8,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "bungee-python"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python bindings for the Bungee time/pitch stretching library"
 readme = "README.md"
 license = { text = "MPL-2.0" }

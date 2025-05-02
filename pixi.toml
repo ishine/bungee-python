@@ -11,9 +11,8 @@ extra-index-urls = ["https://pypi.mirrors.ustc.edu.cn/simple", "https://pypi.pyt
 
 [tasks]
 
-
 [dependencies]
-
+bungee-python = { path = "." }
 python = ">=3.8"
 numpy = "*"
 
