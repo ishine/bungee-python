@@ -1,8 +1,9 @@
 [workspace]
 authors = ["longred <longredzhong@outlook.com>"]
-channels = ["conda-forge"]
+channels = ["conda-forge", "https://prefix.dev/pixi-build-backends"]
 name = "bungee-python"
-platforms = ["linux-64"]
+platforms = ["win-64", "linux-64", "osx-arm64", "osx-64"]
+preview = ["pixi-build"]
 version = "0.1.0"
 
 [pypi-options]
@@ -24,3 +25,16 @@ pytest-cov = ">=6.1.1,<7"
 
 [pypi-dependencies]
 bungee-python = { path = "."}
+
+[package]
+name = "bungee-python"
+version = "0.1.1"
+
+[package.build]
+backend = { name = "pixi-build-python", version = "0.1.*" }
+
+[package.host-dependencies] 
+scikit-build-core = ">=0.7"
+
+[package.run-dependencies] 
+numpy = "*"
