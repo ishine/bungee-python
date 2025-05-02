@@ -18,7 +18,7 @@
 
 ## 安装
 
-您可以通过 pip 从 PyPI 安装 `bungee-python` (发布后):
+您可以通过 pip 从 PyPI 安装 `bungee-python`:
 
 ```bash
 pip install bungee-python
@@ -31,9 +31,7 @@ pip install bungee-python
 ```python
 # filepath: example.py
 import numpy as np
-# 假设您已经安装了 bungee-python 包
-from bungee_python import bungee # 导入方式可能需要根据您的打包结构调整
-
+from bungee_python import bungee
 # --- 准备输入音频 ---
 sample_rate = 44100
 channels = 1
