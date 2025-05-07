@@ -35,3 +35,10 @@ install(TARGETS bungee bungee_library
         RUNTIME DESTINATION bungee_python
         ARCHIVE DESTINATION bungee_python
 )
+
+install(FILES
+    src/bungee_python/bungee.pyi
+    src/bungee_python/__init__.py
+    src/bungee_python/py.typed
+    DESTINATION bungee_python
+)

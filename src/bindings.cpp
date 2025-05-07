@@ -1,204 +1,167 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
+#include <pybind11/stl.h>
 #include "bungee/Bungee.h"
-#include <vector>    // 包含 vector
-#include <stdexcept> // 包含 runtime_error
-#include <cmath>     // 包含 NAN
-#include <algorithm> // 包含 std::max, std::min
+#include "bungee/Stream.h"
+#include <vector>
+#include <memory>
+#include <stdexcept>
+#include <cmath>
+#include <string>
+#include <iostream>
 
 namespace py = pybind11;
 
-// 绑定 Bungee::Stretcher<Bungee::Basic>
-class PyBungee
+class BungeePy
 {
 public:
-    PyBungee(int sample_rate, int channels)
-        : stretcher({sample_rate, sample_rate}, channels), channels(channels)
+    BungeePy(int sample_rate, int channels)
+        : sample_rate_(sample_rate), channels_(channels),
+          stretcher_(std::make_unique<Bungee::Stretcher<Bungee::Basic>>(Bungee::SampleRates{sample_rate, sample_rate}, channels)),
+          speed_(1.0), pitch_(1.0), instrumentation_(false)
     {
-        request.position = 0.0;
-        request.speed = 1.0;
-        request.pitch = 1.0;
-        request.reset = true;       // 初始重置
-        stretcher.preroll(request); // 调用 preroll
-        request.reset = false;      // preroll 后取消重置标志
+        stretcher_->enableInstrumentation(false);
     }
 
-    void set_speed(float speed) { request.speed = speed; }
-    void set_pitch(float pitch) { request.pitch = pitch; }
-    void set_position(float position) { request.position = position; }
-    void reset() { request.reset = true; } // 设置重置标志，下次 process 会生效
-
-    // 输入 shape: (frames, channels)，输出 shape: (frames, channels)
-    py::array_t<float> process(py::array_t<float, py::array::c_style | py::array::forcecast> input)
+    void set_speed(double speed)
     {
-        py::buffer_info in_info = input.request();
-        if (in_info.ndim != 2 || in_info.shape[1] != channels)
-            throw std::runtime_error("输入必须为 shape=(frames, channels) 的二维 float32 数组");
+        speed_ = speed;
+    }
+    void set_pitch(double pitch)
+    {
+        pitch_ = pitch;
+    }
+    void set_instrumentation(bool enable)
+    {
+        instrumentation_ = enable;
+        stretcher_->enableInstrumentation(enable);
+    }
 
-        int total_input_frames = in_info.shape[0];
-        const float *in_ptr = static_cast<const float *>(in_info.ptr);
+    py::array_t<float> process(py::array_t<float, py::array::c_style | py::array::forcecast> input_py_array)
+    {
+        if (input_py_array.ndim() != 2)
+            throw std::runtime_error("Input must be 2D array (frames, channels)");
+        if (input_py_array.shape(1) != channels_)
+            throw std::runtime_error("Input channel count mismatch");
 
-        std::vector<float> output_buffer;
-        // 预估输出大小，可以根据 speed 调整，这里简单预留输入大小的两倍
-        output_buffer.reserve(total_input_frames * channels * 2);
-
-        int current_input_frame = 0;
-        bool input_finished = false;
-
-        // 主处理循环 + Flushing 循环
-        while (true)
+        ssize_t total_input_frames = input_py_array.shape(0);
+        if (total_input_frames == 0)
         {
-            // 如果输入数据处理完毕，并且需要 flush，则设置 position 为 NAN
-            if (input_finished)
-            {
-                if (stretcher.isFlushed())
-                {
-                    break; // Flushing 完成，退出循环
-                }
-                request.position = NAN; // 设置 NAN 以进行 flushing
-                request.reset = false;  // Flushing 时不应重置
-            }
-            else
-            {
-                // 正常处理，更新下一 grain 的位置
-                // 注意：第一次循环时，request 的 position/reset 由构造函数或 reset() 设置
-                // 后续循环由 stretcher.next() 更新
-                if (current_input_frame > 0 || request.reset)
-                {
-                    // 只有在处理过至少一帧或者需要重置时才调用 next
-                    // 或者在 reset 后，第一次调用 specifyGrain 前不调用 next
-                    // request.reset = false; // 在 specifyGrain 之前处理 reset 标志
-                }
-            }
-
-            // 1. 指定 Grain 并获取所需输入块
-            // 假设输入 NumPy 数组代表从 0 开始的音频
-            auto input_chunk = stretcher.specifyGrain(request, 0.0);
-            request.reset = false; // specifyGrain 会处理 reset 标志，之后清除它
-
-            // 如果 position 是 NAN (flushing 阶段)，input_chunk 可能无效或不需要数据
-            bool flushing = std::isnan(request.position);
-
-            // 准备 analyseGrain 的参数
-            const float *grain_data_ptr = nullptr;
-            int mute_head = 0;
-            int mute_tail = 0;
-
-            if (!flushing)
-            {
-                // 计算实际需要的输入范围 (相对于当前 input buffer)
-                int needed_begin = input_chunk.begin;
-                int needed_end = input_chunk.end;
-                int needed_frames = needed_end - needed_begin;
-
-                if (needed_frames > 0)
-                {
-                    // 计算可用数据的范围 (相对于当前 input buffer)
-                    int available_begin = 0; // 输入 buffer 总是从 0 开始
-                    int available_end = total_input_frames;
-
-                    // 计算实际提供给 analyseGrain 的数据指针和静音帧数
-                    int provide_begin = std::max(needed_begin, available_begin);
-                    int provide_end = std::min(needed_end, available_end);
-                    int provide_frames = provide_end - provide_begin;
-
-                    if (provide_frames > 0)
-                    {
-                        grain_data_ptr = in_ptr + provide_begin * channels;
-                        mute_head = provide_begin - needed_begin; // 开头有多少需要的帧无法提供
-                        mute_tail = needed_end - provide_end;     // 末尾有多少需要的帧无法提供
-                    }
-                    else
-                    {
-                        // 需要的数据完全在可用范围之外
-                        mute_head = needed_frames;
-                        mute_tail = 0;
-                    }
-
-                    // 更新当前处理到的输入帧位置 (粗略估计)
-                    // Bungee 内部会更精确地管理 position
-                    current_input_frame = needed_end;
-                    if (current_input_frame >= total_input_frames)
-                    {
-                        input_finished = true; // 标记输入已处理完
-                    }
-                }
-                else
-                {
-                    // specifyGrain 返回了无效的块？或者 position 超前了？
-                    // 标记输入结束，进入 flushing
-                    input_finished = true;
-                    continue; // 跳过 analyse/synthesise，直接进入下一轮 flushing 判断
-                }
-            }
-            else
-            {
-                // Flushing 阶段，不需要实际数据，传递 nullptr
-                grain_data_ptr = nullptr;
-                // analyseGrain 可能需要知道整个预期块都是静音的
-                // 但 Bungee 文档说 NAN grain 不产生输出，可能 analyseGrain 会忽略数据
-                // 传递 0 试试
-                mute_head = 0;
-                mute_tail = 0;
-            }
-
-            // 2. 分析 Grain
-            // 使用 channel stride = channels (对于 shape=(frames, channels) 的 C-style numpy array)
-            stretcher.analyseGrain(grain_data_ptr, channels, mute_head, mute_tail);
-
-            // 3. 合成 Grain
-            Bungee::OutputChunk out_chunk;
-            stretcher.synthesiseGrain(out_chunk);
-
-            // 4. 拷贝输出 (处理非交错数据)
-            if (out_chunk.frameCount > 0 && out_chunk.data)
-            {
-                output_buffer.reserve(output_buffer.size() + out_chunk.frameCount * channels); // 确保容量
-                for (int frame = 0; frame < out_chunk.frameCount; ++frame)
-                {
-                    for (int ch = 0; ch < channels; ++ch)
-                    {
-                        // 从 Bungee 的 planar 输出读取数据
-                        float sample = out_chunk.data[ch * out_chunk.channelStride + frame];
-                        // 写入到 interleaved 的 vector
-                        output_buffer.push_back(sample);
-                    }
-                }
-            }
-
-            // 5. 准备下一个 Request (仅在非 flushing 阶段)
-            if (!flushing)
-            {
-                stretcher.next(request);
-            }
-            // Flushing 阶段 request.position 保持 NAN
+            return py::array_t<float>(std::vector<ssize_t>{0, static_cast<ssize_t>(channels_)});
         }
 
-        // 返回结果
-        ssize_t out_frames = output_buffer.size() / channels;
-        // 创建 NumPy 数组，这里会拷贝 vector 的数据
-        py::array_t<float> result({out_frames, (ssize_t)channels});
-        std::memcpy(result.mutable_data(), output_buffer.data(), output_buffer.size() * sizeof(float));
-        return result;
+        auto input_py_unchecked = input_py_array.unchecked<2>();
+
+        Bungee::Stream<Bungee::Basic> stream(*stretcher_, 4096, channels_);
+        const int max_block_size = 4096;
+
+        std::vector<std::vector<float>> input_chunk_cpp(channels_, std::vector<float>(max_block_size));
+
+        double current_processing_speed = std::max(std::abs(speed_), 1e-9);
+        ssize_t output_buffer_capacity_for_chunk = static_cast<ssize_t>(std::ceil(static_cast<double>(max_block_size) / current_processing_speed)) + 10;
+        if (output_buffer_capacity_for_chunk <= 0)
+        {
+            output_buffer_capacity_for_chunk = max_block_size * 4; // Default safety net
+        }
+
+        std::vector<std::vector<float>> output_chunk_cpp(channels_, std::vector<float>(output_buffer_capacity_for_chunk));
+
+        std::vector<const float *> input_chunk_ptrs(channels_);
+        std::vector<float *> output_chunk_ptrs(channels_);
+        for (int c = 0; c < channels_; ++c)
+        {
+            input_chunk_ptrs[c] = input_chunk_cpp[c].data();
+            output_chunk_ptrs[c] = output_chunk_cpp[c].data();
+        }
+
+        std::vector<std::vector<float>> full_output_channels(channels_);
+        ssize_t current_input_frame_offset = 0;
+
+        while (current_input_frame_offset < total_input_frames)
+        {
+            ssize_t current_chunk_input_frames = std::min(static_cast<ssize_t>(max_block_size), total_input_frames - current_input_frame_offset);
+
+            for (int c = 0; c < channels_; ++c)
+            {
+                for (ssize_t f = 0; f < current_chunk_input_frames; ++f)
+                {
+                    input_chunk_cpp[c][f] = input_py_unchecked(current_input_frame_offset + f, c);
+                }
+            }
+
+            double ideal_output_frames_for_this_chunk = static_cast<double>(current_chunk_input_frames) / current_processing_speed;
+            // Ensure the output buffer for the chunk is large enough.
+            // output_chunk_cpp was already sized based on max_block_size and speed.
+            // ideal_output_frames_for_this_chunk will be <= output_buffer_capacity_for_chunk.
+
+            int processed_frames_in_chunk = stream.process(
+                input_chunk_ptrs.data(), output_chunk_ptrs.data(),
+                static_cast<int>(current_chunk_input_frames),
+                ideal_output_frames_for_this_chunk,
+                pitch_);
+
+            if (processed_frames_in_chunk < 0)
+            {
+                throw std::runtime_error("Bungee stream.process returned negative frame count.");
+            }
+            // Check if Bungee wrote more than the buffer capacity (it shouldn't if ideal_output_frames_for_this_chunk is respected)
+            if (static_cast<ssize_t>(processed_frames_in_chunk) > output_buffer_capacity_for_chunk)
+            {
+                throw std::runtime_error("Bungee stream.process wrote more frames than output buffer capacity for chunk.");
+            }
+
+            for (int c = 0; c < channels_; ++c)
+            {
+                full_output_channels[c].insert(full_output_channels[c].end(), output_chunk_cpp[c].begin(), output_chunk_cpp[c].begin() + processed_frames_in_chunk);
+            }
+
+            current_input_frame_offset += current_chunk_input_frames;
+        }
+
+        ssize_t final_total_output_frames = 0;
+        if (channels_ > 0 && !full_output_channels[0].empty())
+        {
+            final_total_output_frames = full_output_channels[0].size();
+        }
+
+        py::array_t<float> final_output_py({final_total_output_frames, static_cast<ssize_t>(channels_)});
+        if (final_total_output_frames > 0)
+        {
+            auto final_out_py_unchecked = final_output_py.mutable_unchecked<2>();
+            for (int c = 0; c < channels_; ++c)
+            {
+                for (ssize_t f = 0; f < final_total_output_frames; ++f)
+                {
+                    final_out_py_unchecked(f, c) = full_output_channels[c][f];
+                }
+            }
+        }
+        return final_output_py;
     }
 
+    double get_speed() const { return speed_; }
+    double get_pitch() const { return pitch_; }
+    bool get_instrumentation() const { return instrumentation_; }
+
 private:
-    Bungee::Stretcher<Bungee::Basic> stretcher;
-    Bungee::Request request;
-    int channels;
+    int sample_rate_;
+    int channels_;
+    double speed_;
+    double pitch_;
+    bool instrumentation_;
+    std::unique_ptr<Bungee::Stretcher<Bungee::Basic>> stretcher_;
 };
 
 PYBIND11_MODULE(bungee, m)
 {
-    m.doc() = "bungee python bindings via pybind11";
-
-    py::class_<PyBungee>(m, "Bungee")
+    py::class_<BungeePy>(m, "Bungee")
         .def(py::init<int, int>(), py::arg("sample_rate"), py::arg("channels"))
-        .def("set_speed", &PyBungee::set_speed, py::arg("speed"))
-        .def("set_pitch", &PyBungee::set_pitch, py::arg("pitch"))
-        .def("set_position", &PyBungee::set_position, py::arg("position"))
-        .def("reset", &PyBungee::reset)
-        .def("process", &PyBungee::process, py::arg("input"),
-             "处理输入的音频数据 (NumPy 数组 shape=(frames, channels), dtype=float32).\n"
-             "返回处理后的音频数据 (NumPy 数组 shape=(frames, channels), dtype=float32).");
+        .def_property("speed", &BungeePy::get_speed, &BungeePy::set_speed)
+        .def_property("pitch", &BungeePy::get_pitch, &BungeePy::set_pitch)
+        .def_property("instrumentation", &BungeePy::get_instrumentation, &BungeePy::set_instrumentation)
+        .def("set_speed", &BungeePy::set_speed)
+        .def("set_pitch", &BungeePy::set_pitch)
+        .def("process", &BungeePy::process, py::arg("input"), R"pbdoc(
+            处理音频: 输入float32二维数组 (frames, channels), 返回处理后音频数组
+        )pbdoc");
 }
