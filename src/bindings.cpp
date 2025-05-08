@@ -17,139 +17,126 @@ class BungeePy
 public:
     BungeePy(int sample_rate, int channels)
         : sample_rate_(sample_rate), channels_(channels),
-          stretcher_(std::make_unique<Bungee::Stretcher<Bungee::Basic>>(Bungee::SampleRates{sample_rate, sample_rate}, channels)),
-          speed_(1.0), pitch_(1.0), instrumentation_(false)
+          speed_(1.0), pitch_(1.0), first_call_(true)
     {
+        stretcher_ = std::make_unique<Bungee::Stretcher<Bungee::Basic>>(
+            Bungee::SampleRates{sample_rate, sample_rate}, 
+            channels
+        );
         stretcher_->enableInstrumentation(false);
     }
 
     void set_speed(double speed)
     {
-        speed_ = speed;
+        speed_ = std::max(std::abs(speed), 1e-9);
     }
+    
     void set_pitch(double pitch)
     {
         pitch_ = pitch;
     }
+    
     void set_instrumentation(bool enable)
     {
-        instrumentation_ = enable;
         stretcher_->enableInstrumentation(enable);
     }
 
     py::array_t<float> process(py::array_t<float, py::array::c_style | py::array::forcecast> input_py_array)
     {
+        // 验证输入数据
         if (input_py_array.ndim() != 2)
-            throw std::runtime_error("Input must be 2D array (frames, channels)");
+            throw std::runtime_error("输入必须是2D数组 (frames, channels)");
         if (input_py_array.shape(1) != channels_)
-            throw std::runtime_error("Input channel count mismatch");
+            throw std::runtime_error("输入通道数不匹配");
 
-        ssize_t total_input_frames = input_py_array.shape(0);
-        if (total_input_frames == 0)
-        {
+        // 获取输入框架数
+        ssize_t input_frames = input_py_array.shape(0);
+        if (input_frames == 0) {
             return py::array_t<float>(std::vector<ssize_t>{0, static_cast<ssize_t>(channels_)});
         }
 
-        auto input_py_unchecked = input_py_array.unchecked<2>();
+        // 计算期望的输出样本数
+        double output_sample_count_ideal = (input_frames * sample_rate_) / (speed_ * sample_rate_);
+        int max_output_frames = static_cast<int>(std::ceil(output_sample_count_ideal)) + 10;
 
-        Bungee::Stream<Bungee::Basic> stream(*stretcher_, 4096, channels_);
-        const int max_block_size = 4096;
-
-        std::vector<std::vector<float>> input_chunk_cpp(channels_, std::vector<float>(max_block_size));
-
-        double current_processing_speed = std::max(std::abs(speed_), 1e-9);
-        ssize_t output_buffer_capacity_for_chunk = static_cast<ssize_t>(std::ceil(static_cast<double>(max_block_size) / current_processing_speed)) + 10;
-        if (output_buffer_capacity_for_chunk <= 0)
-        {
-            output_buffer_capacity_for_chunk = max_block_size * 4; // Default safety net
+        // 初始化或重新初始化Stream对象
+        if (!stream_ || max_buffer_size_ < static_cast<int>(input_frames)) {
+            max_buffer_size_ = std::max(4096, static_cast<int>(input_frames));
+            stream_ = std::make_unique<Bungee::Stream<Bungee::Basic>>(
+                *stretcher_,
+                max_buffer_size_,
+                channels_
+            );
+            first_call_ = true;  // 重置标志
         }
 
-        std::vector<std::vector<float>> output_chunk_cpp(channels_, std::vector<float>(output_buffer_capacity_for_chunk));
-
-        std::vector<const float *> input_chunk_ptrs(channels_);
-        std::vector<float *> output_chunk_ptrs(channels_);
-        for (int c = 0; c < channels_; ++c)
-        {
-            input_chunk_ptrs[c] = input_chunk_cpp[c].data();
-            output_chunk_ptrs[c] = output_chunk_cpp[c].data();
+        // 提取输入数据的指针
+        auto input_buffer = input_py_array.unchecked<2>();
+        
+        // 创建输入指针数组 (保持与main.cpp相同的方式)
+        std::vector<const float*> input_ptrs(channels_);
+        
+        // 转换输入数据格式 (按通道分离)
+        std::vector<std::vector<float>> channel_buffers(channels_);
+        for (int c = 0; c < channels_; ++c) {
+            channel_buffers[c].resize(input_frames);
+            for (ssize_t i = 0; i < input_frames; ++i) {
+                channel_buffers[c][i] = input_buffer(i, c);
+            }
+            input_ptrs[c] = channel_buffers[c].data();
         }
 
-        std::vector<std::vector<float>> full_output_channels(channels_);
-        ssize_t current_input_frame_offset = 0;
-
-        while (current_input_frame_offset < total_input_frames)
-        {
-            ssize_t current_chunk_input_frames = std::min(static_cast<ssize_t>(max_block_size), total_input_frames - current_input_frame_offset);
-
-            for (int c = 0; c < channels_; ++c)
-            {
-                for (ssize_t f = 0; f < current_chunk_input_frames; ++f)
-                {
-                    input_chunk_cpp[c][f] = input_py_unchecked(current_input_frame_offset + f, c);
-                }
-            }
-
-            double ideal_output_frames_for_this_chunk = static_cast<double>(current_chunk_input_frames) / current_processing_speed;
-            // Ensure the output buffer for the chunk is large enough.
-            // output_chunk_cpp was already sized based on max_block_size and speed.
-            // ideal_output_frames_for_this_chunk will be <= output_buffer_capacity_for_chunk.
-
-            int processed_frames_in_chunk = stream.process(
-                input_chunk_ptrs.data(), output_chunk_ptrs.data(),
-                static_cast<int>(current_chunk_input_frames),
-                ideal_output_frames_for_this_chunk,
-                pitch_);
-
-            if (processed_frames_in_chunk < 0)
-            {
-                throw std::runtime_error("Bungee stream.process returned negative frame count.");
-            }
-            // Check if Bungee wrote more than the buffer capacity (it shouldn't if ideal_output_frames_for_this_chunk is respected)
-            if (static_cast<ssize_t>(processed_frames_in_chunk) > output_buffer_capacity_for_chunk)
-            {
-                throw std::runtime_error("Bungee stream.process wrote more frames than output buffer capacity for chunk.");
-            }
-
-            for (int c = 0; c < channels_; ++c)
-            {
-                full_output_channels[c].insert(full_output_channels[c].end(), output_chunk_cpp[c].begin(), output_chunk_cpp[c].begin() + processed_frames_in_chunk);
-            }
-
-            current_input_frame_offset += current_chunk_input_frames;
+        // 为输出分配内存
+        std::vector<ssize_t> shape = {static_cast<ssize_t>(max_output_frames), static_cast<ssize_t>(channels_)};
+        py::array_t<float> output_array(shape);
+        py::buffer_info output_buf = output_array.request();
+        float* output_ptr = static_cast<float*>(output_buf.ptr);
+        
+        // 设置输出指针数组
+        std::vector<float*> output_ptrs(channels_);
+        for (int c = 0; c < channels_; ++c) {
+            output_ptrs[c] = output_ptr + c * max_output_frames;
         }
-
-        ssize_t final_total_output_frames = 0;
-        if (channels_ > 0 && !full_output_channels[0].empty())
-        {
-            final_total_output_frames = full_output_channels[0].size();
-        }
-
-        py::array_t<float> final_output_py({final_total_output_frames, static_cast<ssize_t>(channels_)});
-        if (final_total_output_frames > 0)
-        {
-            auto final_out_py_unchecked = final_output_py.mutable_unchecked<2>();
-            for (int c = 0; c < channels_; ++c)
-            {
-                for (ssize_t f = 0; f < final_total_output_frames; ++f)
-                {
-                    final_out_py_unchecked(f, c) = full_output_channels[c][f];
-                }
+        
+        // 处理音频
+        int output_frames = stream_->process(
+            input_ptrs.data(),
+            output_ptrs.data(),
+            static_cast<int>(input_frames),
+            output_sample_count_ideal,
+            pitch_
+        );
+        
+        // 创建正确大小的返回数组
+        py::array_t<float> final_output = py::array_t<float>({static_cast<ssize_t>(output_frames), static_cast<ssize_t>(channels_)});
+        auto final_output_buf = final_output.request();
+        float* final_output_ptr = static_cast<float*>(final_output_buf.ptr);
+        
+        // 按行优先顺序填充输出数组
+        for (int i = 0; i < output_frames; ++i) {
+            for (int c = 0; c < channels_; ++c) {
+                final_output_ptr[i * channels_ + c] = output_ptrs[c][i];
             }
         }
-        return final_output_py;
+        
+        return final_output;
     }
 
     double get_speed() const { return speed_; }
     double get_pitch() const { return pitch_; }
-    bool get_instrumentation() const { return instrumentation_; }
+    int get_latency() const { 
+        return stream_ ? stream_->latency() : 0; 
+    }
 
 private:
     int sample_rate_;
     int channels_;
+    int max_buffer_size_ = 4096;
     double speed_;
     double pitch_;
-    bool instrumentation_;
+    bool first_call_;
     std::unique_ptr<Bungee::Stretcher<Bungee::Basic>> stretcher_;
+    std::unique_ptr<Bungee::Stream<Bungee::Basic>> stream_;
 };
 
 PYBIND11_MODULE(bungee, m)
@@ -158,9 +145,10 @@ PYBIND11_MODULE(bungee, m)
         .def(py::init<int, int>(), py::arg("sample_rate"), py::arg("channels"))
         .def_property("speed", &BungeePy::get_speed, &BungeePy::set_speed)
         .def_property("pitch", &BungeePy::get_pitch, &BungeePy::set_pitch)
-        .def_property("instrumentation", &BungeePy::get_instrumentation, &BungeePy::set_instrumentation)
         .def("set_speed", &BungeePy::set_speed)
         .def("set_pitch", &BungeePy::set_pitch)
+        .def("set_instrumentation", &BungeePy::set_instrumentation)
+        .def("get_latency", &BungeePy::get_latency)
         .def("process", &BungeePy::process, py::arg("input"), R"pbdoc(
             处理音频: 输入float32二维数组 (frames, channels), 返回处理后音频数组
         )pbdoc");
