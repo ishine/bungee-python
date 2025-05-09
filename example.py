@@ -38,61 +38,21 @@ def generate_test_audio(
     return audio
 
 
-def process_audio(
-    input_audio, sample_rate, speed=1.0, pitch=1.0, compensate_latency=True
-):
-    """使用Bungee处理音频
-
-    Args:
-        input_audio: 输入音频，shape=(frames, channels)
-        sample_rate: 采样率 (Hz)
-        speed: 速度因子 (默认1.0)
-        pitch: 音高因子 (默认1.0)
-        compensate_latency: 是否补偿处理延迟 (默认True)
-
-    Returns:
-        处理后的音频，shape=(frames, channels)
-    """
+def process_audio(input_audio, sample_rate, speed=1.0, pitch=1.0):
+    """使用Bungee处理音频"""
     channels = input_audio.shape[1]
-
     # 创建处理器实例，直接设置速度和音高参数
     stretcher = bungee.Bungee(
-        sample_rate=sample_rate, 
+        sample_rate=sample_rate,
         channels=channels,
         speed=speed,
-        pitch=pitch
+        pitch=pitch,
+        preroll_scale=1,
     )
-    
-    # 处理音频
-    output_audio = stretcher.process(input_audio)
-    latency_samples = stretcher.get_latency()
-    print(
-        "latency",
-        latency_samples,
-        "samples (",
-        latency_samples / sample_rate,
-        "seconds)",
-    )
-
-    if compensate_latency and latency_samples > 0:
-        # 计算延迟对应的输出样本数（考虑速度因素）
-        latency_output_samples = int(latency_samples / max(speed, 0.001))
-
-        # 方法1：截断输出前部的延迟样本
-        if latency_output_samples < output_audio.shape[0]:
-            print(f"截断前{latency_output_samples}个样本以补偿延迟")
-            output_audio = output_audio[latency_output_samples:]
-
-        # 方法2：在输出中添加相应的零填充（根据需要取消注释使用）
-        # zero_pad = np.zeros((latency_output_samples, channels), dtype=np.float32)
-        # output_audio = np.concatenate([output_audio, zero_pad], axis=0)
-
-    return output_audio
+    return stretcher.process(input_audio)
 
 
-def plot_waveforms(
-    original, processed, sample_rate, title="音频波形对比", align_time=True
-):
+def plot_waveforms(original, processed, sample_rate, title="音频波形对比"):
     """绘制原始和处理后的波形对比图
 
     Args:
@@ -100,9 +60,8 @@ def plot_waveforms(
         processed: 处理后的音频数组
         sample_rate: 采样率
         title: 图表标题
-        align_time: 是否对齐时间轴（考虑速度变化）
     """
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6))
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(20, 6))
     print(original.mean(), original.std())
     print(processed.mean(), processed.std())
 
@@ -132,6 +91,36 @@ def plot_waveforms(
     plt.savefig(f"output/{title.replace(' ', '_')}.png")
 
 
+# 添加频谱对比函数
+
+def plot_spectrum(original, processed, sample_rate, title="频谱对比"):
+    """绘制原始和处理后音频的频谱对比"""
+    # 仅取第一通道
+    orig = original[:, 0]
+    proc = processed[:, 0]
+    # 取相同长度的信号用于FFT
+    n = max(len(orig), len(proc))
+    # 计算下一个2的幂次长度，以提高清晰度
+    n_fft = 1 << (n - 1).bit_length()
+    # FFT
+    orig_fft = np.abs(np.fft.rfft(orig, n=n_fft))
+    proc_fft = np.abs(np.fft.rfft(proc, n=n_fft))
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sample_rate)
+
+    # 绘图
+    plt.figure(figsize=(1, 6))
+    plt.plot(freqs, orig_fft, label='Original')
+    plt.plot(freqs, proc_fft, label='Processed')
+    plt.title(title)
+    plt.xlabel('Frequency (Hz)')
+    plt.ylabel('Magnitude')
+    plt.legend()
+    plt.grid(True)
+    os.makedirs("output", exist_ok=True)
+    plt.savefig(f"output/{title.replace(' ', '_')}.png")
+    plt.close()
+
+
 def save_audio(audio, sample_rate, filename):
     """保存音频到文件
 
@@ -148,7 +137,7 @@ def main():
     # 音频参数
     sample_rate = 44100
     channels = 2  # 使用立体声以展示多通道处理
-    duration_seconds = 10
+    duration_seconds = 1
     frequency = 440  # A4音符
 
     print(f"生成测试音频: {frequency}Hz, {duration_seconds}秒, {channels}通道")
@@ -159,42 +148,18 @@ def main():
 
     # 测试不同参数组合
     test_cases = [
-        {"speed": 1.0, "pitch": 1.0, "name": "原速_原音高", "compensate_latency": True},
-        {"speed": 0.5, "pitch": 1.0, "name": "半速_原音高", "compensate_latency": True},
-        {"speed": 2.0, "pitch": 1.0, "name": "倍速_原音高", "compensate_latency": True},
-        {
-            "speed": 1.0,
-            "pitch": 0.5,
-            "name": "原速_降低八度",
-            "compensate_latency": True,
-        },
-        {
-            "speed": 1.0,
-            "pitch": 2.0,
-            "name": "原速_提高八度",
-            "compensate_latency": True,
-        },
-        {
-            "speed": 0.8,
-            "pitch": 1.2,
-            "name": "减速_提高音高",
-            "compensate_latency": True,
-        },
-        # 添加一个不补偿延迟的用例进行对比
-        {
-            "speed": 1.0,
-            "pitch": 1.0,
-            "name": "原速_原音高_不补偿延迟",
-            "compensate_latency": False,
-        },
+        {"speed": 1.0, "pitch": 1.0, "name": "原速_原音高"},
+        {"speed": 0.5, "pitch": 1.0, "name": "半速_原音高"},
+        {"speed": 2.0, "pitch": 1.0, "name": "倍速_原音高"},
+        {"speed": 1.0, "pitch": 0.5, "name": "原速_降低八度"},
+        {"speed": 1.0, "pitch": 2.0, "name": "原速_提高八度"},
+        {"speed": 0.8, "pitch": 1.2, "name": "减速_提高音高"},
     ]
 
     # 处理并保存所有测试用例
     for case in test_cases:
         print(f"\n处理测试用例: {case['name']}")
-        print(
-            f"速度: {case['speed']}, 音高: {case['pitch']}, 补偿延迟: {case['compensate_latency']}"
-        )
+        print(f"速度: {case['speed']}, 音高: {case['pitch']}")
 
         # 处理音频
         output_audio = process_audio(
@@ -202,7 +167,6 @@ def main():
             sample_rate,
             speed=case["speed"],
             pitch=case["pitch"],
-            compensate_latency=case.get("compensate_latency", True),
         )
 
         print(f"输出音频形状: {output_audio.shape}")
@@ -210,7 +174,8 @@ def main():
         # 绘制波形对比图
         title = f"波形比较 - {case['name']}"
         plot_waveforms(input_audio, output_audio, sample_rate, title)
-
+        # 绘制频谱对比图
+        plot_spectrum(input_audio, output_audio, sample_rate, f"频谱比较 - {case['name']}")
         # 保存处理后的音频
         save_audio(output_audio, sample_rate, f"{case['name']}.wav")
 
