@@ -47,7 +47,6 @@ def process_audio(input_audio, sample_rate, speed=1.0, pitch=1.0):
         channels=channels,
         speed=speed,
         pitch=pitch,
-        preroll_scale=4,
     )
     stretcher.set_debug(True)  # 设置调试模式
     return stretcher.process(input_audio)
@@ -139,7 +138,7 @@ def main():
     sample_rate = 44100
     channels = 2  # 使用立体声以展示多通道处理
     duration_seconds = 1
-    frequency = 220  # 
+    frequency = 110  # 
 
     print(f"生成测试音频: {frequency}Hz, {duration_seconds}秒, {channels}通道")
     input_audio = generate_test_audio(
