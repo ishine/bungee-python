@@ -1,13 +1,6 @@
 import numpy as np
+import re
 from bungee_python import bungee
-
-try:
-    from bungee_python import bungee_stretcher
-
-    HAS_STRETCHER_API = True
-except ImportError:
-    HAS_STRETCHER_API = False
-    print("警告: Stretcher API 不可用，只能测试 Stream API")
 import matplotlib.pyplot as plt
 import soundfile as sf
 import os
@@ -30,9 +23,11 @@ def generate_test_audio(
     """
     # 生成时间序列
     t = np.linspace(0.0, duration_seconds, int(sample_rate * duration_seconds))
+    # 生成随时间线性增长的振幅包络
+    amp_env = np.linspace(0.0, amplitude, t.shape[0])
 
-    # 生成正弦波
-    audio = amplitude * np.sin(2.0 * np.pi * frequency * t)
+    # 生成正弦波，振幅随时间增长
+    audio = amp_env * np.sin(2.0 * np.pi * frequency * t)
     audio = audio.astype(np.float32)
 
     # 调整通道数
@@ -40,7 +35,7 @@ def generate_test_audio(
         audio = audio[:, np.newaxis]  # 单声道
     elif channels == 2:
         # 双声道，第二个通道稍微相位偏移以产生立体声效果
-        audio_right = amplitude * np.sin(2.0 * np.pi * frequency * t + 0.2)
+        audio_right = amp_env * np.sin(2.0 * np.pi * frequency * t + 0.2)
         audio = np.stack([audio, audio_right.astype(np.float32)], axis=-1)
 
     return audio
@@ -50,55 +45,69 @@ def process_audio(input_audio, sample_rate, speed=1.0, pitch=1.0):
     """使用Bungee处理音频"""
     channels = input_audio.shape[1]
     # 创建处理器实例，直接设置速度和音高参数
-    stretcher = bungee.Bungee(
+    processor = bungee.Bungee(
         sample_rate=sample_rate,
         channels=channels,
         speed=speed,
         pitch=pitch,
     )
-    stretcher.preroll()  # 预处理以准备音频流
-    audio = stretcher.process(input_audio)
-    print(f"延迟: {stretcher.get_latency() / sample_rate}秒")
+    processor.set_debug(True)
+    # processor.process(input_audio.copy()[:5000, :])
+    processor.preroll()  # 预处理以准备音频流
+    audio = processor.process(input_audio)
+    print(f"延迟: {processor.get_latency() / sample_rate}秒")
     return audio
 
 
-def plot_waveforms(original, processed, sample_rate, title="音频波形对比"):
-    """绘制原始和处理后的波形对比图
+def plot_waveforms(original, processed, sample_rate, title="Waveform Comparison"):
+    """Plot comparison of original and processed audio waveforms
 
     Args:
-        original: 原始音频数组
-        processed: 处理后的音频数组
-        sample_rate: 采样率
-        title: 图表标题
+        original: Original audio array
+        processed: Processed audio array
+        sample_rate: Sample rate
+        title: Chart title
     """
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(20, 6))
-    print(original.mean(), original.std())
-    print(processed.mean(), processed.std())
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 6), sharex=False)
+    print(f"Original audio max: {np.max(original)}, Processed audio max: {np.max(processed)}")
+    print(f"Original audio min: {np.min(original)}, Processed audio min: {np.min(processed)}")
+    # 添加均值和方差信息
+    print(f"Original audio mean: {np.mean(original)}, Processed audio mean: {np.mean(processed)}")
+    print(f"Original audio std: {np.std(original)}, Processed audio std: {np.std(processed)}")
 
-    # 确保音频数据是浮点数
-    # 计算时间轴
+    # Calculate time axis
     t_orig = np.arange(original.shape[0]) / sample_rate
     t_proc = np.arange(processed.shape[0]) / sample_rate
 
-    # Plot original audio waveform (show only the first channel)
-    ax1.plot(t_orig, original[:, 0])
-    ax1.set_title("Original Audio")
+    # Show only the first channel (if multi-channel)
+    orig_ch = original[:, 0] if original.ndim > 1 else original
+    proc_ch = processed[:, 0] if processed.ndim > 1 else processed
+
+    # Plot original audio waveform
+    ax1.plot(t_orig, orig_ch, color="tab:blue", linewidth=1)
+    ax1.set_title("Original Audio (First Channel)")
     ax1.set_ylabel("Amplitude")
+    ax1.grid(True, linestyle="--", alpha=0.5)
     ax1.set_xlim(0, max(t_orig[-1], t_proc[-1]))
 
-    # Plot processed audio waveform (show only the first channel)
-    ax2.plot(t_proc, processed[:, 0])
-    ax2.set_title("Processed Audio")
-    ax2.set_xlabel("Time (seconds)")
+    # Plot processed audio waveform
+    ax2.plot(t_proc, proc_ch, color="tab:orange", linewidth=1)
+    ax2.set_title("Processed Audio (First Channel)")
+    ax2.set_xlabel("Time (s)")
     ax2.set_ylabel("Amplitude")
+    ax2.grid(True, linestyle="--", alpha=0.5)
     ax2.set_xlim(0, max(t_orig[-1], t_proc[-1]))
 
-    fig.tight_layout()
-    plt.suptitle(title)
+    # Optimize layout to avoid title overlap
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.suptitle(title, fontsize=16)
 
-    # 确保输出目录存在
+    # Ensure output directory exists
     os.makedirs("output", exist_ok=True)
-    plt.savefig(f"output/{title.replace(' ', '_')}.png")
+    # Remove special characters from filename
+    safe_title = re.sub(r'[\\/:*?"<>|]', "_", title.replace(" ", "_"))
+    plt.savefig(f"output/{safe_title}.png", dpi=120)
+    plt.close(fig)
 
 
 def save_audio(audio, sample_rate, filename):
@@ -117,7 +126,7 @@ def main():
     # 音频参数
     sample_rate = 44100
     channels = 2  # 使用立体声以展示多通道处理
-    duration_seconds = 1
+    duration_seconds = 1.11
     frequency = 110  #
 
     print(f"生成测试音频: {frequency}Hz, {duration_seconds}秒, {channels}通道")
