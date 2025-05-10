@@ -1,5 +1,13 @@
 import numpy as np
 from bungee_python import bungee
+
+try:
+    from bungee_python import bungee_stretcher
+
+    HAS_STRETCHER_API = True
+except ImportError:
+    HAS_STRETCHER_API = False
+    print("警告: Stretcher API 不可用，只能测试 Stream API")
 import matplotlib.pyplot as plt
 import soundfile as sf
 import os
@@ -48,8 +56,10 @@ def process_audio(input_audio, sample_rate, speed=1.0, pitch=1.0):
         speed=speed,
         pitch=pitch,
     )
-    stretcher.set_debug(True)  # 设置调试模式
-    return stretcher.process(input_audio)
+    stretcher.preroll()  # 预处理以准备音频流
+    audio = stretcher.process(input_audio)
+    print(f"延迟: {stretcher.get_latency() / sample_rate}秒")
+    return audio
 
 
 def plot_waveforms(original, processed, sample_rate, title="音频波形对比"):
@@ -91,36 +101,6 @@ def plot_waveforms(original, processed, sample_rate, title="音频波形对比")
     plt.savefig(f"output/{title.replace(' ', '_')}.png")
 
 
-# 添加频谱对比函数
-
-def plot_spectrum(original, processed, sample_rate, title="频谱对比"):
-    """绘制原始和处理后音频的频谱对比"""
-    # 仅取第一通道
-    orig = original[:, 0]
-    proc = processed[:, 0]
-    # 取相同长度的信号用于FFT
-    n = max(len(orig), len(proc))
-    # 计算下一个2的幂次长度，以提高清晰度
-    n_fft = 1 << (n - 1).bit_length()
-    # FFT
-    orig_fft = np.abs(np.fft.rfft(orig, n=n_fft))
-    proc_fft = np.abs(np.fft.rfft(proc, n=n_fft))
-    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sample_rate)
-
-    # 绘图
-    plt.figure(figsize=(1, 6))
-    plt.plot(freqs, orig_fft, label='Original')
-    plt.plot(freqs, proc_fft, label='Processed')
-    plt.title(title)
-    plt.xlabel('Frequency (Hz)')
-    plt.ylabel('Magnitude')
-    plt.legend()
-    plt.grid(True)
-    os.makedirs("output", exist_ok=True)
-    plt.savefig(f"output/{title.replace(' ', '_')}.png")
-    plt.close()
-
-
 def save_audio(audio, sample_rate, filename):
     """保存音频到文件
 
@@ -138,7 +118,7 @@ def main():
     sample_rate = 44100
     channels = 2  # 使用立体声以展示多通道处理
     duration_seconds = 1
-    frequency = 110  # 
+    frequency = 110  #
 
     print(f"生成测试音频: {frequency}Hz, {duration_seconds}秒, {channels}通道")
     input_audio = generate_test_audio(
@@ -174,8 +154,6 @@ def main():
         # 绘制波形对比图
         title = f"波形比较 - {case['name']}"
         plot_waveforms(input_audio, output_audio, sample_rate, title)
-        # 绘制频谱对比图
-        plot_spectrum(input_audio, output_audio, sample_rate, f"频谱比较 - {case['name']}")
         # 保存处理后的音频
         save_audio(output_audio, sample_rate, f"{case['name']}.wav")
 
