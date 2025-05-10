@@ -1,5 +1,12 @@
 # Bungee Python Bindings
 
+**当前版本 Version: 0.2.0**
+
+> 🆕 0.2.0 更新日志 / Changelog:
+> - 修复了上一版本的初始延迟导致的结果偏移的问题。
+> - Fixed the initial latency/offset issue in previous versions.
+> - 建议所有用户升级到 0.2.0 版本。
+
 [![PyPI version](https://badge.fury.io/py/bungee-python.svg)](https://badge.fury.io/py/bungee-python)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 
