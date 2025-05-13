@@ -5,4 +5,4 @@ Bungee Python 绑定
 
 from bungee_python import bungee
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
