@@ -65,7 +65,7 @@ jobs:
           python -m cibuildwheel --output-dir wheelhouse
         env:
           # 指定要构建的Python版本
-          CIBW_BUILD: "cp37-* cp38-* cp39-* cp310-* cp311-* cp312-*"
+          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-* cp313-*"
           # 跳过不需要的平台
           CIBW_SKIP: "*-musllinux_* pp* *_i686 *_ppc64le *_s390x"
           # 要安装的依赖项
