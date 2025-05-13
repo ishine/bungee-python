@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "bungee-python"
-requires-python = ">=3.7"
+requires-python = ">3.7"
 version = "0.2.0"
 description = "Python bindings for the Bungee time/pitch stretching library"
 readme = "README.md"
@@ -13,6 +13,8 @@ license = { text = "MPL-2.0" }
 [tool.scikit-build]
 cmake.source-dir = "."
 wheel.packages = ["src/bungee_python"]
+wheel.exclude = []
+cmake.define = {"CMAKE_INSTALL_RPATH" = "$ORIGIN", "CMAKE_BUILD_WITH_INSTALL_RPATH" = "ON"}
 
 [tool.pixi.project]
 channels = ["conda-forge"]
@@ -20,7 +22,7 @@ platforms = ["linux-64", "osx-64", "osx-arm64", "win-64"]
 
 [tool.pixi.feature.build.dependencies]
 cmake = ">=3.15,<4"
-python = ">=3.7,<4"
+python = ">3.7,<4"
 cxx-compiler = ">=1.5,<2"
 make = ">=4.4.1,<5"
 ninja = ">=1.12.1,<2"

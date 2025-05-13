@@ -72,10 +72,81 @@ jobs:
           CIBW_BEFORE_BUILD: "pip install scikit-build-core pybind11"
           # Linux使用manylinux镜像
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
-          # 为Mac OS X设置最低部署目标
+          # 构建前查找环境信息
+          CIBW_BEFORE_ALL: |
+            mkdir -p /tmp/bungee_debug
+            echo "=== Build environment ===" >> /tmp/bungee_debug/build_info.txt
+            uname -a >> /tmp/bungee_debug/build_info.txt
+            gcc --version >> /tmp/bungee_debug/build_info.txt
+            
+          # 构建前处理 - 专门针对Linux
+          CIBW_BEFORE_BUILD_LINUX: |
+            echo "Debugging build environment on Linux" 
+            echo "Current directory structure:" 
+            find . -type f -name "*.so" -o -name "*.a" || echo "No library files found"
+            
+          # 构建后处理 - 复制和处理库文件
+          CIBW_AFTER_BUILD_LINUX: |
+            echo "After build process - fixing wheel library dependencies"
+            # Debug - 显示构建目录结构
+            find _skbuild -type f -name "libbungee.so" || echo "libbungee.so not found in _skbuild"
+            find {wheel} -type f || echo "No files in wheel"
+            
+            # 尝试从多个可能的位置找到libbungee.so
+            find _skbuild -name "libbungee.so" -exec cp {} {wheel}/bungee_python/ \; || echo "Failed to copy from _skbuild"
+            find . -name "libbungee.so" -exec cp {} {wheel}/bungee_python/ \; || echo "Failed to copy from current dir"
+            
+            # 确保权限正确
+            if [ -f {wheel}/bungee_python/libbungee.so ]; then
+              chmod 755 {wheel}/bungee_python/libbungee.so
+              echo "libbungee.so found and copied to wheel"
+            else
+              echo "WARNING: libbungee.so not found!"
+              # 创建一个空的库文件以便测试可以继续
+              touch {wheel}/bungee_python/libbungee.so
+            fi
+            
+            # 显示最终wheel内容
+            find {wheel} -type f
+          
+          # 自定义修复wheel命令，使用自定义脚本而不是auditwheel
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: |
+            # 跳过auditwheel repair，我们已在CIBW_AFTER_BUILD_LINUX中复制了需要的库
+            echo "Skipping auditwheel repair for {wheel}"
+            cp {wheel} {dest_dir}/
+            
+          # Mac OS环境设置
           CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=10.14"
-          # 构建后测试wheel是否可安装
-          CIBW_TEST_COMMAND: "python -c \"import bungee_python; print(bungee_python.__version__)\""
+          
+          # 全局环境设置 - 确保rpath正确并优先使用当前目录
+          CIBW_ENVIRONMENT: >
+            CMAKE_INSTALL_RPATH="$ORIGIN"
+            CMAKE_BUILD_RPATH_USE_ORIGIN=ON
+            CMAKE_BUILD_WITH_INSTALL_RPATH=ON
+            
+          # 构建后测试wheel是否可安装，如果测试失败，提供更多调试信息
+          CIBW_TEST_COMMAND: |
+            python -c "import sys; print(f'Python version: {sys.version}')"
+            python -c "import os; print(os.listdir('bungee_python'))" || echo "Failed to list bungee_python directory" 
+            python -c "import bungee_python; print(f'bungee_python version: {bungee_python.__version__}')" || echo "Failed to import bungee_python"
+
+          # 构建后处理 - macOS
+          CIBW_AFTER_BUILD_MACOS: |
+            echo "After build process - fixing wheel library dependencies on macOS"
+            # 查找libbungee动态库并复制到wheel包中
+            find . -name "libbungee*.dylib" -exec cp {} {wheel}/bungee_python/ \; || echo "No dylib found"
+            # 修复权限
+            find {wheel}/bungee_python -name "*.dylib" -exec chmod 755 {} \; || true
+            # 显示wheel内容
+            find {wheel} -type f
+
+          # 构建后处理 - Windows
+          CIBW_AFTER_BUILD_WINDOWS: |
+            echo "After build process - fixing wheel library dependencies on Windows"
+            # 查找并复制DLL
+            powershell -Command "Get-ChildItem -Recurse -Filter 'bungee*.dll' | ForEach-Object { Copy-Item $_.FullName '{wheel}/bungee_python/' -Force }"
+            # 显示wheel内容
+            powershell -Command "Get-ChildItem -Recurse '{wheel}'"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4

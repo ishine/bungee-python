@@ -36,6 +36,16 @@ install(TARGETS bungee bungee_library
         ARCHIVE DESTINATION bungee_python
 )
 
+# 复制.so库到bungee_python目录
+install(CODE "
+    file(GLOB BUNGEE_LIB_FILES \${CMAKE_BINARY_DIR}/*bungee*.so* \${CMAKE_BINARY_DIR}/*bungee*.dll* \${CMAKE_BINARY_DIR}/*bungee*.dylib*)
+    foreach(LIB_FILE \${BUNGEE_LIB_FILES})
+        file(COPY \${LIB_FILE} DESTINATION \${CMAKE_INSTALL_PREFIX}/bungee_python/
+             FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+        message(STATUS \"Copied library: \${LIB_FILE} to \${CMAKE_INSTALL_PREFIX}/bungee_python/\")
+    endforeach()
+")
+
 install(FILES
     src/bungee_python/bungee.pyi
     src/bungee_python/__init__.py
